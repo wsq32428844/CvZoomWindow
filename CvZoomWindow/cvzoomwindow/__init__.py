@@ -48,6 +48,15 @@ class CvZoomWindow:
         self.__current_mouse_x = 0      # 当前鼠标位置X - 用于滚轮缩放中心
         self.__current_mouse_y = 0      # 当前鼠标位置Y - 用于滚轮缩放中心
         self.__mouse_callback_func = None
+        
+        # 旋转相关属性
+        self.__rotation_center_x = 0    # 旋转中心X坐标（窗口坐标）
+        self.__rotation_center_y = 0    # 旋转中心Y坐标（窗口坐标）
+        self.__rotation_center_set = False  # 旋转中心是否已设置
+        self.__rotation_in_progress = False  # 是否正在旋转
+        self.__old_rotation_angle = 0   # 上次的旋转角度
+        self.__old_rotation_angle_for_drag = 0  # 用于拖动旋转的旧角度
+        self.__right_button_down_pos = (0, 0)  # 右键按下的位置
 
         # Window creation with debugging
         print(f"Creating window: {winname}")
@@ -311,6 +320,37 @@ class CvZoomWindow:
                 except Exception:
                     pass
                 
+        # 如果设置了旋转中心，绘制标记
+        if self.__rotation_center_set and self.__disp_image is not None:
+            try:
+                # 确保坐标在有效范围内
+                h, w = self.__disp_image.shape[:2]
+                cx = max(0, min(int(self.__rotation_center_x), w-1))
+                cy = max(0, min(int(self.__rotation_center_y), h-1))
+                
+                # 绘制红色十字标记，更明显的样式
+                center_size = 15
+                # 横线
+                cv2.line(self.__disp_image, 
+                         (cx - center_size, cy),
+                         (cx + center_size, cy),
+                         (0, 0, 255), 3, cv2.LINE_AA)
+                # 竖线
+                cv2.line(self.__disp_image, 
+                         (cx, cy - center_size),
+                         (cx, cy + center_size),
+                         (0, 0, 255), 3, cv2.LINE_AA)
+                # 绘制红色圆圈
+                cv2.circle(self.__disp_image, 
+                          (cx, cy),
+                          8, (0, 0, 255), -1)
+                # 绘制白色边框，使标记更突出
+                cv2.circle(self.__disp_image, 
+                          (cx, cy),
+                          8, (255, 255, 255), 2, cv2.LINE_AA)
+            except Exception as e:
+                print(f"绘制旋转中心标记出错: {e}")
+        
         try:
             # 确保disp_image不为None
             if self.__disp_image is not None:
@@ -634,6 +674,38 @@ class CvZoomWindow:
             print(f"EVENT_LBUTTONUP detected at ({x}, {y})")
             self.__mouse_down_flag = False
             print(f"  Set __mouse_down_flag = {self.__mouse_down_flag}")
+            
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            # 右键按下时，只记录位置，不立即创建旋转中心
+            print(f"EVENT_RBUTTONDOWN detected at ({x}, {y}) - 记录右键按下位置")
+            self.__right_button_down_pos = (x, y)
+            print(f"  右键按下位置已记录: ({self.__right_button_down_pos[0]}, {self.__right_button_down_pos[1]})")
+            
+        elif event == cv2.EVENT_RBUTTONUP:
+            # 右键释放时创建旋转中心（如果位置没有大幅移动）
+            print(f"EVENT_RBUTTONUP detected at ({x}, {y}) - 创建旋转中心")
+            # 检查是否是点击而不是拖动（位置变化很小）
+            dx = x - self.__right_button_down_pos[0]
+            dy = y - self.__right_button_down_pos[1]
+            if dx*dx + dy*dy < 10:  # 距离小于3px认为是点击
+                # 创建新的旋转中心
+                self.__rotation_center_x = x
+                self.__rotation_center_y = y
+                self.__rotation_center_set = True
+                print(f"  创建新的旋转中心: ({self.__rotation_center_x}, {self.__rotation_center_y})")
+                self.redraw_image()
+            # 无论如何都重置旋转状态
+            if hasattr(self, '_CvZoomWindow__old_rotation_angle_for_drag'):
+                delattr(self, '_CvZoomWindow__old_rotation_angle_for_drag')
+            print(f"  已重置旋转状态")
+            
+        elif event == cv2.EVENT_MBUTTONDOWN:
+            # 中键点击取消旋转并清除标记
+            print(f"EVENT_MBUTTONDOWN detected at ({x}, {y}) - 取消旋转")
+            self.__rotation_center_set = False
+            self.__rotation_in_progress = False
+            print(f"  已取消旋转，清除旋转中心标记")
+            self.redraw_image()
 
         elif event == cv2.EVENT_MOUSEMOVE:
             # マウスが動いているとき
@@ -643,7 +715,50 @@ class CvZoomWindow:
             self.__current_mouse_y = y
             print(f"  🎯 Updated current mouse position to ({x}, {y}) - 用于滚轮缩放中心")
             
-            if self.__mouse_down_flag is True:
+            # 检查是否是右键拖动并且已设置旋转中心
+            is_right_button_down = flags & cv2.EVENT_FLAG_RBUTTON
+            if is_right_button_down and self.__rotation_center_set:
+                print("  🔄 右键拖动 - 执行旋转操作")
+                # 计算当前旋转角度
+                dx = x - self.__rotation_center_x
+                dy = y - self.__rotation_center_y
+                current_angle = math.degrees(math.atan2(dy, dx))
+                
+                # 应用旋转变换
+                try:
+                    # 如果是第一次旋转，初始化旧角度
+                    if not hasattr(self, '_CvZoomWindow__old_rotation_angle_for_drag'):
+                        self.__old_rotation_angle_for_drag = current_angle
+                        return
+                    
+                    # 计算旋转角度差
+                    angle_diff = current_angle - self.__old_rotation_angle_for_drag
+                    
+                    # 处理角度环绕问题
+                    if angle_diff > 180:
+                        angle_diff -= 360
+                    elif angle_diff < -180:
+                        angle_diff += 360
+                    
+                    # 限制单次旋转角度，使旋转更平滑
+                    max_angle_step = 5.0  # 单次最大旋转角度
+                    if abs(angle_diff) > max_angle_step:
+                        angle_diff = max_angle_step * (1 if angle_diff > 0 else -1)
+                    
+                    # 应用旋转变换
+                    self.__affine_matrix = affine.rotateAtMatrix(angle_diff, self.__rotation_center_x, self.__rotation_center_y).dot(self.__affine_matrix)
+                    print(f"  🔄 Applied rotation matrix, angle_diff={angle_diff:.2f} degrees")
+                    
+                    # 更新旧角度
+                    self.__old_rotation_angle_for_drag = current_angle
+                    
+                    # 重绘图像
+                    print("  🖼️ Calling redraw_image() after rotation")
+                    self.redraw_image()
+                    print("  ✅ Image redrawn successfully")
+                except Exception as e:
+                    print(f"  ❌ Error during rotation: {e}")
+            elif self.__mouse_down_flag is True:
                 print("  🚀 Mouse is dragging - processing pan")
                 
                 # 确保必要的属性已初始化
@@ -667,6 +782,12 @@ class CvZoomWindow:
                 try:
                     self.__affine_matrix = affine.translateMatrix(dx, dy).dot(self.__affine_matrix)
                     print(f"  🔄 Applied translation matrix, dx={dx}, dy={dy}")
+                    
+                    # 如果设置了旋转中心，让它也跟随平移
+                    if self.__rotation_center_set:
+                        self.__rotation_center_x += dx
+                        self.__rotation_center_y += dy
+                        print(f"  🔄 Updated rotation center: ({self.__rotation_center_x}, {self.__rotation_center_y})")
                     
                     # 更新当前位置
                     self.__old_point_x = x
