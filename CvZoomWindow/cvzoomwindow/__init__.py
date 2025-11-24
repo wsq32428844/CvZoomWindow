@@ -2,6 +2,7 @@ __version__ = "0.0.1"
 
 import math
 import cv2
+import numpy as np
 
 from cvzoomwindow import affine
 
@@ -39,15 +40,29 @@ class CvZoomWindow:
         self.__grid_color = (128, 128, 0) # グリッド線の色
         self.__min_grid_disp_scale = 20 # グリッド線を表示する最小倍率
 
+        # 鼠标事件相关属性 - 确保全部正确初始化
         self.__mouse_event_enabled = True
-        self.__mouse_down_flag = False
-
+        self.__mouse_down_flag = False  # 鼠标按下标志
+        self.__old_point_x = 0          # 上次鼠标位置X - 使用私有属性
+        self.__old_point_y = 0          # 上次鼠标位置Y - 使用私有属性
+        self.__current_mouse_x = 0      # 当前鼠标位置X - 用于滚轮缩放中心
+        self.__current_mouse_y = 0      # 当前鼠标位置Y - 用于滚轮缩放中心
         self.__mouse_callback_func = None
 
-        cv2.namedWindow(winname, cv2.WINDOW_NORMAL)
+        # Window creation with debugging
+        print(f"Creating window: {winname}")
+        try:
+            cv2.namedWindow(winname, cv2.WINDOW_NORMAL)
+            print("Window created successfully")
+        except Exception as e:
+            print(f"Error creating window: {e}")
 
-        # コールバック関数の登録
-        cv2.setMouseCallback(winname, self._onMouse, winname)
+        # コールバック関数の登録 with debugging
+        try:
+            cv2.setMouseCallback(winname, self._onMouse, winname)
+            print("Mouse callback set successfully")
+        except Exception as e:
+            print(f"Error setting mouse callback: {e}")
 
     @property
     def winname(self) -> str:
@@ -234,15 +249,20 @@ class CvZoomWindow:
             True : Display images in the entire window (default)     
             False :Do not display images in the entire window         
         '''
-
+        # 移除过多的打印语句以提高性能
         if image is None:
             return
 
-        self.__src_image = image
-
-        if zoom_fit is True:
-            self.zoom_fit()
+        # 只有当图像改变时才更新源图像和执行zoom_fit
+        # 如果是同一图像的重复调用，只重绘
+        if self.__src_image is None or not np.array_equal(self.__src_image, image):
+            self.__src_image = image
+            if zoom_fit:
+                self.zoom_fit()
+            else:
+                self.redraw_image()
         else:
+            # 对于重复调用同一图像，只重绘
             self.redraw_image()
 
     def redraw_image(self):
@@ -253,26 +273,53 @@ class CvZoomWindow:
             return
         
         try:
-            _, _, win_width, win_height = cv2.getWindowImageRect(self.__winname)
-        except:
-            #print('redraw_image error')
-            return
+            rect = cv2.getWindowImageRect(self.__winname)
+            if rect[2] == 0 or rect[3] == 0:
+                # 设置默认窗口大小
+                win_width, win_height = 800, 600
+                cv2.resizeWindow(self.__winname, win_width, win_height)
+                # 再次尝试获取窗口大小
+                rect = cv2.getWindowImageRect(self.__winname)
+                if rect[2] == 0 or rect[3] == 0:
+                    win_width, win_height = 800, 600
+                else:
+                    _, _, win_width, win_height = rect
+            else:
+                _, _, win_width, win_height = rect
+        except Exception:
+            win_width, win_height = 800, 600
 
-        self.__disp_image = cv2.warpAffine(self.__src_image, self.__affine_matrix[:2,], (win_width, win_height), flags = self.__inter, borderValue = self.__back_color)
+        try:
+            self.__disp_image = cv2.warpAffine(self.__src_image, self.__affine_matrix[:2,], (win_width, win_height), 
+                                             flags = self.__inter, borderValue = self.__back_color)
+        except Exception:
+            return
         
         if self.__grid_disp_enabled is True:
             if self.__affine_matrix[0, 0] > self.__min_grid_disp_scale:
                 # Grid線を表示する条件が揃っているとき
-                self._draw_grid_line()
+                try:
+                    self._draw_grid_line()
+                except Exception:
+                    pass
 
         if self.__bright_disp_enabled is True:
             if self.__affine_matrix[0, 0] > self.__min_bright_disp_scale:
                 # 輝度値を表示する条件が揃っているとき
-                self._draw_bright_value()
+                try:
+                    self._draw_bright_value()
+                except Exception:
+                    pass
                 
+        try:
+            # 确保disp_image不为None
+            if self.__disp_image is not None:
+                cv2.imshow(self.__winname, self.__disp_image)
+                # 必须调用waitKey以允许窗口刷新，但只返回键值而不打印
+                cv2.waitKey(1)  # 最小等待时间，确保窗口刷新
+        except Exception as e:
+            print(f"Error displaying image: {e}")
         
-        cv2.imshow(self.__winname, self.__disp_image)
-        #cv2.waitKey(1)            
 
     def zoom_fit(self, image_width : int = 0, image_height : int = 0):
         '''Display the image in the entire window
@@ -284,7 +331,7 @@ class CvZoomWindow:
         image_height : int, optional
             Image Height, by default 0
         '''
-
+        # 移除过多的打印语句以提高性能
         if self.__src_image is not None:
             # 画像データが表示されているとき
             # 画像のサイズ
@@ -299,13 +346,16 @@ class CvZoomWindow:
         # 画像表示領域のサイズ
         try:
             _, _, win_width, win_height = cv2.getWindowImageRect(self.__winname)
-        except:
-            print('zoom_fit error')
-            return
+        except Exception:
+            # 使用默认窗口尺寸作为回退
+            win_width, win_height = 800, 600
 
-        if (image_width * image_height <= 0) or (win_width * win_height <= 0):
-            # 画像サイズもしくはウィンドウサイズが０のとき
+        if (image_width * image_height <= 0):
             return
+            
+        # 如果窗口尺寸无效，使用默认值
+        if (win_width * win_height <= 0):
+            win_width, win_height = 800, 600
 
         # アフィン変換の初期化
         self.__affine_matrix = affine.identityMatrix()
@@ -345,11 +395,15 @@ class CvZoomWindow:
             value > 1 : zoom up
             value < 1 : zoom down
         '''
+        print(f"zoom called with delta: {delta}")
         # 画像表示領域のサイズ
         try:
             _, _, win_width, win_height = cv2.getWindowImageRect(self.__winname)
+            center_x = win_width/2.0
+            center_y = win_height/2.0
+            print(f"Window center: ({center_x}, {center_y})")
         except:
-            #print('zoom error')
+            print('zoom error - window not available')
             return
 
         self.zoom_at(delta, win_width/2.0, win_height/2.0)
@@ -366,21 +420,31 @@ class CvZoomWindow:
         wy : float
             Window Y-coordinate
         '''
+        print(f"zoom_at called with delta: {delta}, center: ({wx}, {wy})")
+        print(f"Current scale: {self.__affine_matrix[0, 0]}")
 
         if delta >= 1.0:
             # マウスホイールを上に回したとき、画像の拡大
-            if self.__affine_matrix[0, 0] * delta > self.__max_scale:
+            new_scale = self.__affine_matrix[0, 0] * delta
+            print(f"Zooming in: new_scale = {new_scale}, max_scale = {self.__max_scale}")
+            if new_scale > self.__max_scale:
+                print("Scale exceeds maximum limit, not zooming")
                 return
             self.__affine_matrix = affine.scaleAtMatrix(delta, wx, wy).dot(self.__affine_matrix)
               
         elif delta > 0.0:
             # マウスホイールを下に回したとき、画像の縮小
-            if self.__affine_matrix[0, 0] * delta < self.__min_scale:
+            new_scale = self.__affine_matrix[0, 0] * delta
+            print(f"Zooming out: new_scale = {new_scale}, min_scale = {self.__min_scale}")
+            if new_scale < self.__min_scale:
+                print("Scale below minimum limit, not zooming")
                 return
             self.__affine_matrix = affine.scaleAtMatrix(delta, wx, wy).dot(self.__affine_matrix)
         else:
+            print("Invalid delta value, not zooming")
             return
 
+        print(f"New affine matrix: {self.__affine_matrix}")
         self.redraw_image()
 
     def pan(self, tx : float, ty : float):
@@ -393,7 +457,11 @@ class CvZoomWindow:
         ty : float
             Amount of movement in Y direction
         '''
+        print(f"pan called with tx: {tx}, ty: {ty}")
+        print(f"Affine matrix before pan: {self.__affine_matrix}")
+        # 平行移動用行列の取得
         self.__affine_matrix = affine.translateMatrix(tx, ty).dot(self.__affine_matrix)
+        print(f"Affine matrix after pan: {self.__affine_matrix}")
         self.redraw_image()
 
     def destroyWindow(self):
@@ -485,11 +553,58 @@ class CvZoomWindow:
         params : 
             コールバック関数登録時に渡された値
         '''
+        # 添加详细的事件调试信息，确保函数被调用和self正确绑定
+        print(f"📌 _onMouse CALLED - event: {event}, x: {x}, y: {y}, flags: {flags}, params: {params}")
+        print(f"  Self reference: {self}")
+        
+        # 确保所有必要的属性都已初始化
+        if not hasattr(self, '_CvZoomWindow__mouse_down_flag'):
+            print("  ⚠️ WARNING: __mouse_down_flag not found, initializing...")
+            self.__mouse_down_flag = False
+        
+        if not hasattr(self, '_CvZoomWindow__old_point_x'):
+            print("  ⚠️ WARNING: __old_point_x not found, initializing...")
+            self.__old_point_x = 0
+            self.__old_point_y = 0
+            
+        if not hasattr(self, '_CvZoomWindow__old_affine_matrix'):
+            print("  ⚠️ WARNING: __old_affine_matrix not found, initializing...")
+            self.__old_affine_matrix = affine.identityMatrix()
+            
+        if not hasattr(self, '_CvZoomWindow__affine_matrix'):
+            print("  ⚠️ WARNING: __affine_matrix not found, initializing...")
+            self.__affine_matrix = affine.identityMatrix()
+        
+        # 事件类型翻译
+        event_names = {
+            cv2.EVENT_MOUSEMOVE: "EVENT_MOUSEMOVE",
+            cv2.EVENT_LBUTTONDOWN: "EVENT_LBUTTONDOWN",
+            cv2.EVENT_LBUTTONUP: "EVENT_LBUTTONUP",
+            cv2.EVENT_RBUTTONDOWN: "EVENT_RBUTTONDOWN",
+            cv2.EVENT_RBUTTONUP: "EVENT_RBUTTONUP",
+            cv2.EVENT_MBUTTONDOWN: "EVENT_MBUTTONDOWN",
+            cv2.EVENT_MBUTTONUP: "EVENT_MBUTTONUP",
+            cv2.EVENT_LBUTTONDBLCLK: "EVENT_LBUTTONDBLCLK",
+            cv2.EVENT_RBUTTONDBLCLK: "EVENT_RBUTTONDBLCLK",
+            cv2.EVENT_MBUTTONDBLCLK: "EVENT_MBUTTONDBLCLK",
+            cv2.EVENT_MOUSEWHEEL: "EVENT_MOUSEWHEEL",
+            cv2.EVENT_MOUSEHWHEEL: "EVENT_MOUSEHWHEEL"
+        }
+        event_name = event_names.get(event, f"UNKNOWN({event})")
+        print(f"  🎯 Event type: {event_name}")
+        
+        # 检查self.__disp_image状态和鼠标按下标志
+        print(f"  📊 self.__disp_image is None: {self.__disp_image is None}")
+        print(f"  📊 self.__mouse_event_enabled: {self.__mouse_event_enabled}")
+        print(f"  📊 self.__mouse_down_flag: {self.__mouse_down_flag}")
+        print(f"  📊 self.__old_point_x, self.__old_point_y: {self.__old_point_x}, {self.__old_point_y}")
+        
+        # 移除这个条件，确保即使没有显示图像也能处理鼠标事件
+        # if self.__disp_image is None:
+        #     return
 
-        if self.__disp_image is None:
-            return
-
-        #print(f"[{x}, {y}] event = {event} flags = {flags} params = {params}")
+        print(f"  🔄 Processing mouse event...")
+        print(f"[{x}, {y}] event = {event} flags = {flags} params = {params}")
 
         if self.__mouse_callback_func is not None:
             invMat = affine.inverse(self.__affine_matrix)
@@ -502,32 +617,91 @@ class CvZoomWindow:
 
         if event == cv2.EVENT_LBUTTONDOWN:
             # マウスの左ボタンが押されたとき
+            print(f"EVENT_LBUTTONDOWN detected at ({x}, {y})")
             self.__mouse_down_flag = True
-            self.__old_affine_matrix = self.__affine_matrix
-            self.old_point_x = x
-            self.old_point_y = y
+            print(f"  Set __mouse_down_flag = {self.__mouse_down_flag}")
+            # 保存当前矩阵状态
+            self.__old_affine_matrix = affine.identityMatrix()
+            self.__old_affine_matrix[:] = self.__affine_matrix  # 深拷贝矩阵
+            print(f"  Saved __affine_matrix to __old_affine_matrix")
+            # 设置初始拖动点 - 使用私有属性
+            self.__old_point_x = x
+            self.__old_point_y = y
+            print(f"  Set __old_point to ({self.__old_point_x}, {self.__old_point_y})")
 
         elif event == cv2.EVENT_LBUTTONUP:
             # マウスの左ボタンが離されたとき
+            print(f"EVENT_LBUTTONUP detected at ({x}, {y})")
             self.__mouse_down_flag = False
-            # self.old_point_x = x
-            # self.old_point_y = y
+            print(f"  Set __mouse_down_flag = {self.__mouse_down_flag}")
 
         elif event == cv2.EVENT_MOUSEMOVE:
             # マウスが動いているとき
+            print(f"EVENT_MOUSEMOVE detected at ({x}, {y}), down_flag: {self.__mouse_down_flag}")
+            # 始终更新当前鼠标位置，用于滚轮缩放的中心点
+            self.__current_mouse_x = x
+            self.__current_mouse_y = y
+            print(f"  🎯 Updated current mouse position to ({x}, {y}) - 用于滚轮缩放中心")
+            
             if self.__mouse_down_flag is True:
-                # 画像の平行移動
-                # アフィン変換行列の平行移動
-                self.__affine_matrix = affine.translateMatrix(x - self.old_point_x, y - self.old_point_y).dot(self.__old_affine_matrix)
-
-                #print(f"[{x}, {y}] event = {event} flags = {flags} params = {params} ({x - self.old_point_x}, {y - self.old_point_y}) {self.__affine_matrix[0, 2]}  {self.__affine_matrix[1, 2]} {self.__old_affine_matrix[0, 2]}  {self.__old_affine_matrix[1, 2]}")
-                self.redraw_image()
+                print("  🚀 Mouse is dragging - processing pan")
+                
+                # 确保必要的属性已初始化
+                if not hasattr(self, '_CvZoomWindow__old_point_x'):
+                    print("  ⚠️ __old_point_x not found, initializing")
+                    self.__old_point_x = x
+                    self.__old_point_y = y
+                    return
+                    
+                # 计算移动增量
+                dx = x - self.__old_point_x
+                dy = y - self.__old_point_y
+                print(f"  📏 Calculated delta: dx={dx}, dy={dy}")
+                
+                # 确保仿射矩阵已初始化
+                if not hasattr(self, '_CvZoomWindow__affine_matrix'):
+                    print("  ⚠️ __affine_matrix not found, initializing")
+                    self.__affine_matrix = affine.identityMatrix()
+                
+                # 应用平移变换
+                try:
+                    self.__affine_matrix = affine.translateMatrix(dx, dy).dot(self.__affine_matrix)
+                    print(f"  🔄 Applied translation matrix, dx={dx}, dy={dy}")
+                    
+                    # 更新当前位置
+                    self.__old_point_x = x
+                    self.__old_point_y = y
+                    print(f"  🎯 Updated __old_point to ({self.__old_point_x}, {self.__old_point_y})")
+                    
+                    # 重绘图像
+                    print("  🖼️ Calling redraw_image() after pan")
+                    self.redraw_image()
+                    print("  ✅ Image redrawn successfully")
+                except Exception as e:
+                    print(f"  ❌ Error during pan: {e}")
+            else:
+                print("  🚫 Mouse is not dragging - skipping pan")
 
         elif event == cv2.EVENT_MOUSEWHEEL:
-            if flags > 0:
-                self.zoom_at(self.__zoom_delta, x, y)
+            # 使用保存的当前鼠标位置作为缩放中心，而不是事件中的x,y参数
+            zoom_x = self.__current_mouse_x
+            zoom_y = self.__current_mouse_y
+            print(f"EVENT_MOUSEWHEEL detected - 滚轮方向参数y: {y}, flags: {flags}")
+            print(f"  🎯 使用当前鼠标位置作为缩放中心: ({zoom_x}, {zoom_y})")
+            
+            # ホイール回転方向による倍率変更 - 使用y参数判断方向
+            if y > 0:
+                scale_factor = self.__zoom_delta
+                print(f"  🔼 Wheel UP detected, scale factor: {scale_factor}")
+                print(f"  Calling zoom_at({scale_factor}, {zoom_x}, {zoom_y}) - 以鼠标位置为中心缩放")
+                self.zoom_at(scale_factor, zoom_x, zoom_y)  # 以保存的鼠标位置为中心缩放
+                print(f"  Zoom IN completed - 已在鼠标位置进行放大")
             else:
-                self.zoom_at(1/self.__zoom_delta, x, y)
+                scale_factor = 1 / self.__zoom_delta
+                print(f"  🔽 Wheel DOWN detected, scale factor: {scale_factor}")
+                print(f"  Calling zoom_at({scale_factor}, {zoom_x}, {zoom_y}) - 以鼠标位置为中心缩放")
+                self.zoom_at(scale_factor, zoom_x, zoom_y)  # 以保存的鼠标位置为中心缩放
+                print(f"  Zoom OUT completed - 已在鼠标位置进行缩小")
 
         elif event == cv2.EVENT_LBUTTONDBLCLK:
             # 左ボタンをダブルクリックしたとき、画像全体を表示(zoom_fit)

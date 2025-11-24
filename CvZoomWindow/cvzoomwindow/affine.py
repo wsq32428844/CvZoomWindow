@@ -46,24 +46,26 @@ def rotateMatrix(deg):
 def scaleAtMatrix(scale, cx, cy):
     '''点(cx, cy)を基点とした拡大縮小用アフィン変換行列の取得'''
 
-    # 基点の座標を原点へ移動
+    # 正確な順序でアフィン変換行列を作成
+    # 1. 基点の座標を原点へ移動
+    # 2. 原点周りに拡大縮小
+    # 3. 元の位置へ戻す
     mat = translateMatrix(-cx, -cy)
-    # 原点周りに拡大縮小
-    mat = scaleMatrix(scale).dot(mat)
-    # 元の位置へ戻す
-    mat = translateMatrix(cx, cy).dot(mat)
+    mat = np.dot(scaleMatrix(scale), mat)
+    mat = np.dot(translateMatrix(cx, cy), mat)
 
     return mat
 
 def rotateAtMatrix(deg, cx, cy):
     '''点(cx, cy)を基点とした回転用アフィン変換行列の取得'''
 
-    # 基点の座標を原点へ移動
+    # 正確な順序でアフィン変換行列を作成
+    # 1. 基点の座標を原点へ移動
+    # 2. 原点周りに回転
+    # 3. 元の位置へ戻す
     mat = translateMatrix(-cx, -cy)
-    # 原点周りに回転
-    mat = rotateMatrix(deg).dot(mat)
-    # 元の位置へ戻す
-    mat = translateMatrix(cx, cy).dot(mat)
+    mat = np.dot(rotateMatrix(deg), mat)
+    mat = np.dot(translateMatrix(cx, cy), mat)
 
     return mat
 
