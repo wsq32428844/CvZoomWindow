@@ -41,8 +41,10 @@ class CvZoomWindow:
 
         self.__mouse_event_enabled = True
         self.__mouse_down_flag = False
+        self.__rotate_flag = False
 
         self.__mouse_callback_func = None
+        self.__rotate_base_point = None
 
         cv2.namedWindow(winname, cv2.WINDOW_NORMAL)
 
@@ -271,8 +273,16 @@ class CvZoomWindow:
                 self._draw_bright_value()
                 
         
+        # 绘制旋转基点标记
+        if self.__rotate_base_point is not None:
+            # 将图像坐标转换为窗口坐标
+            win_x, win_y = self.image_to_window_point(self.__rotate_base_point[0], self.__rotate_base_point[1])
+            # 绘制红色标记（圆形）
+            cv2.circle(self.__disp_image, (int(win_x), int(win_y)), 5, (0, 0, 255), -1)
+            cv2.circle(self.__disp_image, (int(win_x), int(win_y)), 7, (255, 255, 255), 1)
+        
         cv2.imshow(self.__winname, self.__disp_image)
-        #cv2.waitKey(1)            
+        cv2.waitKey(1)            
 
     def zoom_fit(self, image_width : int = 0, image_height : int = 0):
         '''Display the image in the entire window
@@ -502,20 +512,42 @@ class CvZoomWindow:
 
         if event == cv2.EVENT_LBUTTONDOWN:
             # マウスの左ボタンが押されたとき
-            self.__mouse_down_flag = True
+            # 选择旋转基点
+            self.__rotate_base_point = self.window_to_image_point(x, y)
+            self.redraw_image()
+
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            # マウスの右ボタンが押されたとき
+            self.__rotate_flag = True
             self.__old_affine_matrix = self.__affine_matrix
             self.old_point_x = x
             self.old_point_y = y
 
+        elif event == cv2.EVENT_RBUTTONUP:
+            # マウスの右ボタンが離されたとき
+            self.__rotate_flag = False
+
         elif event == cv2.EVENT_LBUTTONUP:
             # マウスの左ボタンが離されたとき
-            self.__mouse_down_flag = False
-            # self.old_point_x = x
-            # self.old_point_y = y
+            pass
 
         elif event == cv2.EVENT_MOUSEMOVE:
             # マウスが動いているとき
-            if self.__mouse_down_flag is True:
+            if self.__rotate_flag is True and self.__rotate_base_point is not None:
+                # 计算旋转角度
+                dx_old = self.old_point_x - self.__rotate_base_point[0]
+                dy_old = self.old_point_y - self.__rotate_base_point[1]
+                dx_new = x - self.__rotate_base_point[0]
+                dy_new = y - self.__rotate_base_point[1]
+                
+                angle_old = math.atan2(dy_old, dx_old)
+                angle_new = math.atan2(dy_new, dx_new)
+                angle_diff = math.degrees(angle_new - angle_old)
+                
+                # 执行旋转
+                self.__affine_matrix = affine.rotateAtMatrix(angle_diff, self.__rotate_base_point[0], self.__rotate_base_point[1]).dot(self.__old_affine_matrix)
+                self.redraw_image()
+            elif self.__mouse_down_flag is True:
                 # 画像の平行移動
                 # アフィン変換行列の平行移動
                 self.__affine_matrix = affine.translateMatrix(x - self.old_point_x, y - self.old_point_y).dot(self.__old_affine_matrix)
@@ -536,6 +568,10 @@ class CvZoomWindow:
         elif event == cv2.EVENT_RBUTTONDBLCLK:
             # マウスの右ボタンがダブルクリックされたとき、等倍表示にする
             self.__affine_matrix = affine.scaleAtMatrix(1/self.__affine_matrix[0, 0], x, y).dot(self.__affine_matrix)
+            self.redraw_image()
+        elif event == cv2.EVENT_MBUTTONDOWN:
+            # マウスの中ボタンが押されたとき、清除旋转基点
+            self.__rotate_base_point = None
             self.redraw_image()
 
     def _image_disp_rect(self):
